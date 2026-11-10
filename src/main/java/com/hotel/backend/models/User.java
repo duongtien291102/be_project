@@ -33,6 +33,24 @@ public class User {
 
     private String fullName;
 
+    private String name;
+
+    private String roleId;
+
+    private String roleName;
+
+    private String department;
+
+    private String avatar;
+
+    private String shift;
+
+    private String joinDate;
+
+    private String notes;
+
+    private String status;
+
     @Indexed(unique = true)
     private String email;
 
