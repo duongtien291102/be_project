@@ -3,6 +3,7 @@ package com.hotel.backend.controllers;
 import com.hotel.backend.dto.ApiResponse;
 import com.hotel.backend.dto.AuthResponse;
 import com.hotel.backend.dto.LoginRequest;
+import com.hotel.backend.dto.ProfileUpdateRequest;
 import com.hotel.backend.dto.RegisterRequest;
 import com.hotel.backend.services.AuthService;
 import jakarta.validation.Valid;
@@ -38,5 +39,16 @@ public class AuthController {
         }
         AuthResponse response = authService.getCurrentUser(userDetails.getUsername());
         return ResponseEntity.ok(ApiResponse.ok(response));
+    }
+
+    @PutMapping("/profile")
+    public ResponseEntity<ApiResponse<AuthResponse>> updateProfile(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @Valid @RequestBody ProfileUpdateRequest profileUpdate) {
+        if (userDetails == null) {
+            return ResponseEntity.status(401).body(ApiResponse.error("Chưa xác thực"));
+        }
+        AuthResponse response = authService.updateProfile(userDetails.getUsername(), profileUpdate);
+        return ResponseEntity.ok(ApiResponse.ok("Cập nhật hồ sơ thành công", response));
     }
 }

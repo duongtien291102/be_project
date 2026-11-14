@@ -76,9 +76,12 @@ public class AdminService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Không tìm thấy người dùng với ID: " + userId));
 
-        // Không cho phép khóa tài khoản sysadmin gốc
-        if (user.getRoles().contains("ROLE_SYSADMIN") && "sysadmin".equalsIgnoreCase(user.getUsername())) {
-            throw new IllegalArgumentException("Không thể khóa tài khoản SysAdmin gốc.");
+        // Không cho phép khóa tài khoản sysadmin hoặc bất kỳ tài khoản nào có quyền ROLE_SYSADMIN
+        boolean isSysAdminAccount = "sysadmin".equalsIgnoreCase(user.getUsername())
+                || (user.getRoles() != null && user.getRoles().contains("ROLE_SYSADMIN"))
+                || "ROLE_SYSADMIN".equalsIgnoreCase(user.getRoleId());
+        if (isSysAdminAccount && user.isActive()) {
+            throw new IllegalArgumentException("Không thể khóa tài khoản quản trị cấp cao SysAdmin.");
         }
 
         user.setActive(!user.isActive());

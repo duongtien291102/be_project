@@ -9,7 +9,7 @@ import lombok.Data;
 public class RegisterRequest {
 
     @NotBlank(message = "Tên đăng nhập không được để trống")
-    @Size(min = 3, max = 30, message = "Tên đăng nhập phải từ 3 đến 30 ký tự")
+    @Size(min = 3, max = 100, message = "Tên đăng nhập phải từ 3 đến 100 ký tự")
     private String username;
 
     @NotBlank(message = "Mật khẩu không được để trống")
@@ -24,4 +24,19 @@ public class RegisterRequest {
     private String email;
 
     private String phone;
+    private String dob;
+    private String gender;
+    private String nationality;
+    private String address;
+    private String cccd;
+    private String cccdDate;
+    private String cccdPlace;
+    @Size(max = 3000000, message = "Ảnh CCCD mặt trước vượt quá dung lượng cho phép (tối đa ~2MB)")
+    private String cccdFront;
+
+    @Size(max = 3000000, message = "Ảnh CCCD mặt sau vượt quá dung lượng cho phép (tối đa ~2MB)")
+    private String cccdBack;
+
+    @Size(max = 500000, message = "Ảnh đại diện vượt quá dung lượng cho phép")
+    private String avatar;
 }

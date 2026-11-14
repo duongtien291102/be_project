@@ -1,9 +1,30 @@
+import os
 import random
 import datetime
 from bson import ObjectId
 import pymongo
 
-URI = "mongodb+srv://duongtien291102_db_user:yFuf6uohtENtSUMG@project4.q50m2yq.mongodb.net/hotel_management?retryWrites=true&w=majority"
+
+def load_mongodb_uri():
+    uri = os.environ.get("MONGODB_URI")
+    if uri:
+        return uri.strip()
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as env_file:
+            for line in env_file:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key.strip() == "MONGODB_URI":
+                    return value.strip().strip('"').strip("'")
+    raise RuntimeError(
+        "Missing MONGODB_URI environment variable. Set MONGODB_URI or define it in be_project/.env."
+    )
+
+
+URI = load_mongodb_uri()
 client = pymongo.MongoClient(URI)
 db = client["hotel_management"]
 

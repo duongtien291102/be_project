@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 @Slf4j
 @Component
@@ -28,7 +29,7 @@ public class DataInitializer implements CommandLineRunner {
     @Value("${app.sysadmin.username:sysadmin}")
     private String sysadminUsername;
 
-    @Value("${app.sysadmin.password:Sysadmin@123}")
+    @Value("${app.sysadmin.password:}")
     private String sysadminPassword;
 
     @Value("${app.sysadmin.email:sysadmin@grandhotel.vn}")
@@ -193,13 +194,21 @@ public class DataInitializer implements CommandLineRunner {
     }
 
     private void initSysAdmin() {
-        if (!userRepository.existsByUsername(sysadminUsername)) {
-            User sysadmin = User.builder()
+        User sysadmin = userRepository.findByUsername(sysadminUsername).orElse(null);
+        if (sysadmin == null) {
+            String initialPassword = (sysadminPassword != null && !sysadminPassword.isBlank())
+                    ? sysadminPassword
+                    : UUID.randomUUID().toString();
+            sysadmin = User.builder()
                     .username(sysadminUsername)
-                    .password(passwordEncoder.encode(sysadminPassword))
+                    .password(passwordEncoder.encode(initialPassword))
                     .fullName(sysadminFullName)
+                    .name(sysadminFullName)
                     .email(sysadminEmail)
                     .phone("0900000000")
+                    .roleId("ROLE_SYSADMIN")
+                    .roleName("Quản Trị Viên Hệ Thống (SysAdmin)")
+                    .status("active")
                     .roles(Set.of("ROLE_SYSADMIN", "ROLE_ADMIN"))
                     .active(true)
                     .createdAt(Instant.now())
@@ -210,10 +219,47 @@ public class DataInitializer implements CommandLineRunner {
             log.info("=================================================================");
             log.info("TÀI KHOẢN SYSADMIN ĐÃ ĐƯỢC KHỞI TẠO TỰ ĐỘNG THÀNH CÔNG:");
             log.info("Username: {}", sysadminUsername);
-            log.info("Password: {}", sysadminPassword);
             log.info("Roles   : ROLE_SYSADMIN, ROLE_ADMIN");
             log.info("Quyền   : Toàn quyền cấu hình và trao quyền cho mọi role khác");
+            if (sysadminPassword == null || sysadminPassword.isBlank()) {
+                log.warn("SYSADMIN_PASSWORD chưa được cấu hình; hệ thống đã gán mật khẩu ngẫu nhiên (vui lòng đặt SYSADMIN_PASSWORD trong .env và reset mật khẩu nếu cần).");
+            }
             log.info("=================================================================");
+        } else {
+            boolean changed = false;
+            if (sysadmin.getName() == null || sysadmin.getName().isBlank()) {
+                sysadmin.setName(sysadmin.getFullName() != null ? sysadmin.getFullName() : sysadminFullName);
+                changed = true;
+            }
+            if (sysadmin.getRoleId() == null || sysadmin.getRoleId().isBlank()) {
+                sysadmin.setRoleId("ROLE_SYSADMIN");
+                changed = true;
+            }
+            if (sysadmin.getRoleName() == null || sysadmin.getRoleName().isBlank()) {
+                sysadmin.setRoleName("Quản Trị Viên Hệ Thống (SysAdmin)");
+                changed = true;
+            }
+            if (sysadmin.getStatus() == null || sysadmin.getStatus().isBlank()) {
+                sysadmin.setStatus(sysadmin.isActive() ? "active" : "locked");
+                changed = true;
+            }
+            if (changed) {
+                userRepository.save(sysadmin);
+            }
         }
+        initStaffPasswords();
+    }
+
+    private void initStaffPasswords() {
+        userRepository.findAll().forEach(u -> {
+            if (u.getPassword() == null || u.getPassword().isBlank()) {
+                u.setPassword(passwordEncoder.encode(UUID.randomUUID().toString()));
+                if (u.getStatus() == null || u.getStatus().isBlank()) {
+                    u.setStatus(u.isActive() ? "active" : "locked");
+                }
+                userRepository.save(u);
+                log.info("Initialized secure random password hash for existing staff account: {}", u.getUsername());
+            }
+        });
     }
 }

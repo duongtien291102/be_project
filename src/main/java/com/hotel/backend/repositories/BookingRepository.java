@@ -9,4 +9,6 @@ import java.util.List;
 @Repository
 public interface BookingRepository extends MongoRepository<Booking, String> {
     List<Booking> findAllByOrderByCreatedAtDesc();
+    List<Booking> findByUserIdOrUsername(String userId, String username);
+    List<Booking> findByCccd(String cccd);
 }

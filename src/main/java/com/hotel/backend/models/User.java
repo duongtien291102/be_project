@@ -1,5 +1,6 @@
 package com.hotel.backend.models;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -29,6 +30,7 @@ public class User {
     @Indexed(unique = true)
     private String username;
 
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;
 
     private String fullName;
@@ -55,6 +57,26 @@ public class User {
     private String email;
 
     private String phone;
+
+    private String dob;
+
+    private String gender;
+
+    private String nationality;
+
+    private String address;
+
+    private String cccd;
+
+    private String cccdDate;
+
+    private String cccdPlace;
+
+    private String cccdFront;
+
+    private String cccdBack;
+
+    private String lastLogin;
 
     @Builder.Default
     private Set<String> roles = new HashSet<>();

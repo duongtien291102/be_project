@@ -31,3 +31,8 @@ target/
 ### Log and temp ###
 *.log
 *.tmp
+
+### Environment secrets ###
+.env
+.env.*
+!.env.example

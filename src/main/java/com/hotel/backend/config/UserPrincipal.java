@@ -8,7 +8,10 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
 import java.util.Collection;
-import java.util.stream.Collectors;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 @Getter
 @AllArgsConstructor
@@ -23,12 +26,33 @@ public class UserPrincipal implements UserDetails {
     private final Collection<? extends GrantedAuthority> authorities;
 
     public static UserPrincipal create(User user) {
-        var authorities = user.getRoles().stream()
-                .map(role -> {
-                    String formattedRole = role.startsWith("ROLE_") ? role : "ROLE_" + role.toUpperCase();
-                    return new SimpleGrantedAuthority(formattedRole);
-                })
-                .collect(Collectors.toSet());
+        return create(user, Collections.emptyMap());
+    }
+
+    public static UserPrincipal create(User user, Map<String, Boolean> effectivePermissions) {
+        Set<GrantedAuthority> authorities = new HashSet<>();
+
+        if (user.getRoles() != null) {
+            for (String role : user.getRoles()) {
+                if (role == null || role.isBlank()) continue;
+                String formattedRole = role.startsWith("ROLE_") ? role.toUpperCase() : "ROLE_" + role.toUpperCase();
+                authorities.add(new SimpleGrantedAuthority(formattedRole));
+            }
+        }
+
+        if (user.getRoleId() != null && !user.getRoleId().isBlank()) {
+            String roleId = user.getRoleId().trim();
+            String formattedRoleId = roleId.startsWith("ROLE_") ? roleId.toUpperCase() : roleId;
+            authorities.add(new SimpleGrantedAuthority(formattedRoleId));
+        }
+
+        if (effectivePermissions != null) {
+            effectivePermissions.forEach((permKey, granted) -> {
+                if (Boolean.TRUE.equals(granted) && permKey != null && !permKey.isBlank()) {
+                    authorities.add(new SimpleGrantedAuthority(permKey));
+                }
+            });
+        }
 
         return new UserPrincipal(
                 user.getId(),
