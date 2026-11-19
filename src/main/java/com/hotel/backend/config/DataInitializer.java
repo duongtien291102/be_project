@@ -227,6 +227,11 @@ public class DataInitializer implements CommandLineRunner {
             log.info("=================================================================");
         } else {
             boolean changed = false;
+            if (sysadminPassword != null && !sysadminPassword.isBlank()
+                    && !passwordEncoder.matches(sysadminPassword, sysadmin.getPassword())) {
+                sysadmin.setPassword(passwordEncoder.encode(sysadminPassword));
+                changed = true;
+            }
             if (sysadmin.getName() == null || sysadmin.getName().isBlank()) {
                 sysadmin.setName(sysadmin.getFullName() != null ? sysadmin.getFullName() : sysadminFullName);
                 changed = true;
