@@ -1,0 +1,57 @@
+name: Build & Deploy Backend to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-hotel-backend
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build JAR with Maven
+        run: ./mvnw clean package -DskipTests --batch-mode
+
+      - name: Copy JAR to VPS via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          source: "target/be_project-0.0.1-SNAPSHOT.jar"
+          target: "/tmp/"
+          strip_components: 1
+
+      - name: Deploy & Restart Backend service
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            echo "🚀 Deploy Backend JAR lên /opt/hotel-backend..."
+            systemctl stop hotel-backend
+            cp /tmp/be_project-0.0.1-SNAPSHOT.jar /opt/hotel-backend/app.jar
+            systemctl start hotel-backend
+            sleep 8
+            systemctl is-active hotel-backend
+            echo "✅ Backend deploy thành công! API tại http://${{ secrets.VPS_HOST }}:2402/api"
