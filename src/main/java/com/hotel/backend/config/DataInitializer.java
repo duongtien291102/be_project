@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -41,7 +42,15 @@ public class DataInitializer implements CommandLineRunner {
     @Override
     public void run(String... args) {
         initRoles();
+        migrateLegacyRolesAndUsers();
         initSysAdmin();
+    }
+
+    private static String normalizeRoleId(String rawId) {
+        if (rawId == null) return "";
+        String cleaned = rawId.trim().toUpperCase().replaceAll("[^A-Z0-9_]+", "_").replaceAll("^_+|_+$", "");
+        if (cleaned.isEmpty()) return "";
+        return cleaned.startsWith("ROLE_") ? cleaned : "ROLE_" + cleaned;
     }
 
     private static Map<String, Boolean> makeMap(Object... entries) {
@@ -190,6 +199,89 @@ public class DataInitializer implements CommandLineRunner {
                     .build();
             roleRepository.save(role);
             log.info("Initialized role: {}", roleId);
+        }
+    }
+
+    private void migrateLegacyRolesAndUsers() {
+        for (Role role : roleRepository.findAll()) {
+            String rawId = role.getId();
+            String canonicalId = normalizeRoleId(rawId);
+            if (!canonicalId.isEmpty() && !canonicalId.equals(rawId)) {
+                var canonicalOpt = roleRepository.findById(canonicalId);
+                if (canonicalOpt.isPresent()) {
+                    Role canonical = canonicalOpt.get();
+                    Map<String, Boolean> canonPerms = canonical.getPermissions() != null
+                            ? new HashMap<>(canonical.getPermissions())
+                            : new HashMap<>();
+                    boolean permsChanged = false;
+                    if (role.getPermissions() != null) {
+                        for (Map.Entry<String, Boolean> entry : role.getPermissions().entrySet()) {
+                            if (!canonPerms.containsKey(entry.getKey())) {
+                                canonPerms.put(entry.getKey(), entry.getValue());
+                                permsChanged = true;
+                            }
+                        }
+                    }
+                    if (permsChanged) {
+                        canonical.setPermissions(canonPerms);
+                        roleRepository.save(canonical);
+                    }
+                } else {
+                    Role migrated = Role.builder()
+                            .id(canonicalId)
+                            .name(role.getName())
+                            .description(role.getDescription())
+                            .badgeColor(role.getBadgeColor())
+                            .permissions(role.getPermissions() != null ? new HashMap<>(role.getPermissions()) : new HashMap<>())
+                            .build();
+                    roleRepository.save(migrated);
+                }
+                roleRepository.deleteById(rawId);
+                log.info("Migrated legacy role '{}' -> '{}'", rawId, canonicalId);
+            }
+        }
+
+        for (User user : userRepository.findAll()) {
+            boolean changed = false;
+            Set<String> normalizedRoles = new LinkedHashSet<>();
+            if (user.getRoles() != null) {
+                for (String r : user.getRoles()) {
+                    String nr = normalizeRoleId(r);
+                    if (!nr.isEmpty()) {
+                        normalizedRoles.add(nr);
+                    }
+                }
+            }
+            if (user.getRoles() == null || !normalizedRoles.equals(user.getRoles())) {
+                user.setRoles(normalizedRoles);
+                changed = true;
+            }
+
+            String currentRoleId = user.getRoleId();
+            String normRoleId = (currentRoleId != null && !currentRoleId.isBlank()) ? normalizeRoleId(currentRoleId) : "";
+            if (normRoleId.isEmpty() && !normalizedRoles.isEmpty()) {
+                normRoleId = normalizedRoles.contains("ROLE_SYSADMIN") ? "ROLE_SYSADMIN" : normalizedRoles.iterator().next();
+            }
+            if (!normRoleId.isEmpty() && !normRoleId.equals(currentRoleId)) {
+                user.setRoleId(normRoleId);
+                changed = true;
+            }
+
+            if ((user.getRoleName() == null || user.getRoleName().isBlank()) && !normRoleId.isEmpty()) {
+                roleRepository.findById(normRoleId).ifPresent(role -> {
+                    if (role.getName() != null && !role.getName().isBlank()) {
+                        user.setRoleName(role.getName());
+                    }
+                });
+                if (user.getRoleName() != null && !user.getRoleName().isBlank()) {
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                userRepository.save(user);
+                log.info("Normalized legacy role fields for user: {}", user.getUsername());
+            }
         }
     }
 

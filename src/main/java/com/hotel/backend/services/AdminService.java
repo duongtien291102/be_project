@@ -9,6 +9,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -21,6 +23,13 @@ public class AdminService {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
 
+    private static String normalizeRoleId(String rawId) {
+        if (rawId == null) return "";
+        String cleaned = rawId.trim().toUpperCase().replaceAll("[^A-Z0-9_]+", "_").replaceAll("^_+|_+$", "");
+        if (cleaned.isEmpty()) return "";
+        return cleaned.startsWith("ROLE_") ? cleaned : "ROLE_" + cleaned;
+    }
+
     /**
      * Trao quyền / gán roles cho một tài khoản người dùng
      * Chỉ SysAdmin có quyền thực hiện
@@ -31,7 +40,8 @@ public class AdminService {
 
         // Chuẩn hóa và kiểm tra sự tồn tại của role
         Set<String> formattedRoles = newRoles.stream()
-                .map(r -> r.startsWith("ROLE_") ? r : "ROLE_" + r.toUpperCase())
+                .map(AdminService::normalizeRoleId)
+                .filter(r -> !r.isEmpty())
                 .collect(Collectors.toSet());
 
         for (String roleId : formattedRoles) {
@@ -52,7 +62,7 @@ public class AdminService {
      * Chỉ SysAdmin có quyền cập nhật ma trận phân quyền của các Role
      */
     public Role updateRolePermissions(String roleId, Map<String, Boolean> newPermissions) {
-        String formattedRoleId = roleId.startsWith("ROLE_") ? roleId : "ROLE_" + roleId.toUpperCase();
+        String formattedRoleId = normalizeRoleId(roleId);
 
         Role role = roleRepository.findById(formattedRoleId)
                 .orElseThrow(() -> new IllegalArgumentException("Không tìm thấy vai trò: " + formattedRoleId));
@@ -69,7 +79,17 @@ public class AdminService {
     }
 
     public List<Role> getAllRoles() {
-        return roleRepository.findAll();
+        Map<String, Role> deduped = new LinkedHashMap<>();
+        for (Role r : roleRepository.findAll()) {
+            if (r == null || r.getId() == null) continue;
+            String canonicalId = normalizeRoleId(r.getId());
+            if (canonicalId.isEmpty()) continue;
+            Role existing = deduped.get(canonicalId);
+            if (existing == null || (!existing.getId().startsWith("ROLE_") && r.getId().startsWith("ROLE_"))) {
+                deduped.put(canonicalId, r);
+            }
+        }
+        return new ArrayList<>(deduped.values());
     }
 
     public UserSummaryDto toggleUserActive(String userId) {
