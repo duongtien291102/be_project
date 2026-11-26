@@ -10,4 +10,5 @@ import java.util.List;
 public interface TransactionRepository extends MongoRepository<Transaction, String> {
     List<Transaction> findAllByOrderByCreatedAtInstantDesc();
     List<Transaction> findByYear(Integer year);
+    List<Transaction> findByBookingId(String bookingId);
 }

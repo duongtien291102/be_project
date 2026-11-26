@@ -13,8 +13,10 @@ import com.hotel.backend.repositories.RoleRepository;
 import com.hotel.backend.repositories.RoomRepository;
 import com.hotel.backend.repositories.TransactionRepository;
 import com.hotel.backend.repositories.UserRepository;
+import com.hotel.backend.services.RealtimeNotificationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,12 +24,16 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -55,6 +61,22 @@ public class PublicApiController {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
+    private final RealtimeNotificationService realtimeNotificationService;
+
+    private void broadcastRoomUpdated(Room room) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", room.getId());
+        payload.put("name", room.getName());
+        payload.put("status", room.getStatus());
+        payload.put("currentGuest", room.getCurrentGuest());
+        realtimeNotificationService.broadcast("ROOM_UPDATED", payload);
+    }
+
+    @PreAuthorize("hasAnyAuthority('ROLE_SYSADMIN', 'ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_RECEPTIONIST', 'ROLE_CASHIER', 'manage_bookings', 'manage_finances', 'room_checkin_checkout')")
+    @GetMapping(value = "/notifications/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamNotifications() {
+        return realtimeNotificationService.subscribe();
+    }
 
     private String generateUniqueId(String prefix, Predicate<String> existsChecker) {
         for (int attempt = 0; attempt < 10; attempt++) {
@@ -112,6 +134,14 @@ public class PublicApiController {
         return userCccd != null && !userCccd.isBlank() && userCccd.equals(booking.getCccd());
     }
 
+    private List<Booking> sortBookingsNewestFirst(List<Booking> list) {
+        Comparator<Booking> cmp = Comparator
+                .comparing(Booking::getCreatedAtInstant, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(Booking::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(Booking::getId, Comparator.nullsLast(Comparator.reverseOrder()));
+        return list.stream().sorted(cmp).toList();
+    }
+
     @GetMapping("/rooms")
     public ResponseEntity<ApiResponse<List<Room>>> getRooms() {
         return ResponseEntity.ok(ApiResponse.ok(roomRepository.findAll()));
@@ -136,6 +166,7 @@ public class PublicApiController {
             existing.setCurrentGuest(room.getCurrentGuest());
             existing.setUpdatedAt(Instant.now());
             Room saved = roomRepository.save(existing);
+            broadcastRoomUpdated(saved);
             return ResponseEntity.ok(ApiResponse.ok("Cập nhật trạng thái phòng thành công", saved));
         }
 
@@ -144,6 +175,7 @@ public class PublicApiController {
         }
         room.setUpdatedAt(Instant.now());
         Room saved = roomRepository.save(room);
+        broadcastRoomUpdated(saved);
         return ResponseEntity.ok(ApiResponse.ok("Lưu thông tin phòng thành công", saved));
     }
 
@@ -158,7 +190,7 @@ public class PublicApiController {
     @GetMapping("/bookings")
     public ResponseEntity<ApiResponse<List<Booking>>> getBookings(@AuthenticationPrincipal UserPrincipal currentUser) {
         if (isStaffBookingHandler(currentUser)) {
-            return ResponseEntity.ok(ApiResponse.ok(bookingRepository.findAll()));
+            return ResponseEntity.ok(ApiResponse.ok(sortBookingsNewestFirst(bookingRepository.findAll())));
         }
 
         String userCccd = userRepository.findById(currentUser.getId())
@@ -169,7 +201,7 @@ public class PublicApiController {
                 .filter(b -> isBookingOwnedBy(b, currentUser, userCccd))
                 .toList();
 
-        return ResponseEntity.ok(ApiResponse.ok(ownBookings));
+        return ResponseEntity.ok(ApiResponse.ok(sortBookingsNewestFirst(ownBookings)));
     }
 
     @PreAuthorize("hasAnyAuthority('ROLE_SYSADMIN', 'ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_RECEPTIONIST', 'ROLE_CASHIER', 'ROLE_USER', 'manage_bookings', 'create_booking', 'room_checkin_checkout')")
@@ -257,6 +289,19 @@ public class PublicApiController {
             roomRepository.save(room);
         }
 
+        Map<String, Object> bookingPayload = new LinkedHashMap<>();
+        bookingPayload.put("id", saved.getId());
+        bookingPayload.put("roomId", saved.getRoomId());
+        bookingPayload.put("roomName", saved.getRoomName());
+        bookingPayload.put("customerName", saved.getCustomerName());
+        bookingPayload.put("phone", saved.getPhone());
+        bookingPayload.put("totalAmount", saved.getTotalAmount());
+        bookingPayload.put("depositAmount", saved.getDepositAmount());
+        bookingPayload.put("depositMethod", saved.getDepositMethod());
+        bookingPayload.put("status", saved.getStatus());
+        bookingPayload.put("createdAt", saved.getCreatedAt());
+        realtimeNotificationService.broadcast("BOOKING_CREATED", bookingPayload);
+
         return ResponseEntity.ok(ApiResponse.ok("Đặt phòng thành công", saved));
     }
 
@@ -309,6 +354,16 @@ public class PublicApiController {
             }
             bookingRepository.save(booking);
 
+            if ("Đã hủy".equals(status)) {
+                List<Transaction> linkedTxs = transactionRepository.findByBookingId(booking.getId());
+                for (Transaction linkedTx : linkedTxs) {
+                    if ("Chờ xác nhận".equals(linkedTx.getStatus())) {
+                        linkedTx.setStatus("Đã hủy");
+                        transactionRepository.save(linkedTx);
+                    }
+                }
+            }
+
             if (booking.getRoomId() != null) {
                 roomRepository.findById(booking.getRoomId()).ifPresent(room -> {
                     if ("Đã check-in".equals(status)) {
@@ -326,6 +381,13 @@ public class PublicApiController {
                 });
             }
 
+            Map<String, Object> updatePayload = new LinkedHashMap<>();
+            updatePayload.put("id", booking.getId());
+            updatePayload.put("roomId", booking.getRoomId());
+            updatePayload.put("customerName", booking.getCustomerName());
+            updatePayload.put("status", booking.getStatus());
+            realtimeNotificationService.broadcast("BOOKING_UPDATED", updatePayload);
+
             return ResponseEntity.ok(ApiResponse.ok("Cập nhật trạng thái thành công", booking));
         }).orElse(ResponseEntity.notFound().build());
     }
@@ -340,7 +402,65 @@ public class PublicApiController {
     @PreAuthorize("hasAnyAuthority('ROLE_SYSADMIN', 'ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_CASHIER', 'manage_finances', 'view_revenue')")
     @GetMapping("/transactions")
     public ResponseEntity<ApiResponse<List<Transaction>>> getTransactions() {
-        return ResponseEntity.ok(ApiResponse.ok(transactionRepository.findAll()));
+        Comparator<Transaction> cmp = Comparator
+                .comparing(Transaction::getCreatedAtInstant, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(Transaction::getId, Comparator.nullsLast(Comparator.reverseOrder()));
+        List<Transaction> sorted = transactionRepository.findAll().stream().sorted(cmp).toList();
+        return ResponseEntity.ok(ApiResponse.ok(sorted));
+    }
+
+    @PreAuthorize("hasAnyAuthority('ROLE_SYSADMIN', 'ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_RECEPTIONIST', 'ROLE_CASHIER', 'manage_finances', 'room_checkin_checkout')")
+    @PutMapping("/transactions/{id}/confirm")
+    public ResponseEntity<ApiResponse<Transaction>> confirmTransaction(
+            @PathVariable String id,
+            @AuthenticationPrincipal UserPrincipal currentUser) {
+        return transactionRepository.findById(id).map(tx -> {
+            if ("Đã hủy".equals(tx.getStatus())) {
+                throw new IllegalArgumentException("Không thể xác nhận giao dịch đã bị hủy.");
+            }
+            if (!"Chờ xác nhận".equals(tx.getStatus())) {
+                return ResponseEntity.ok(ApiResponse.ok("Giao dịch đã được xác nhận trước đó", tx));
+            }
+
+            String confirmerName = userRepository.findById(currentUser.getId())
+                    .map(u -> {
+                        if (u.getFullName() != null && !u.getFullName().isBlank()) return u.getFullName();
+                        if (u.getName() != null && !u.getName().isBlank()) return u.getName();
+                        return u.getUsername();
+                    })
+                    .orElse(currentUser.getUsername() != null ? currentUser.getUsername() : "Nhân viên");
+
+            tx.setStatus("Đã hoàn tất");
+            if (tx.getStaff() == null || tx.getStaff().isBlank() || "Cổng Online VietQR".equals(tx.getStaff())) {
+                tx.setStaff("VietQR (Duyệt: " + confirmerName + ")");
+            }
+            Transaction savedTx = transactionRepository.save(tx);
+
+            if (tx.getBookingId() != null && !tx.getBookingId().isBlank()) {
+                bookingRepository.findById(tx.getBookingId()).ifPresent(booking -> {
+                    if (!"Đã hủy".equals(booking.getStatus())) {
+                        double total = booking.getTotalAmount() != null ? booking.getTotalAmount() : 0.0;
+                        double currentPaid = booking.getPaidAmount() != null ? booking.getPaidAmount() : 0.0;
+                        double txAmt = tx.getAmount() != null ? tx.getAmount() : 0.0;
+                        double newPaid = Math.min(total, currentPaid + txAmt);
+                        booking.setPaidAmount(newPaid);
+                        booking.setRemainingAmount(Math.max(0.0, total - newPaid));
+                        bookingRepository.save(booking);
+                    }
+                });
+            }
+
+            Map<String, Object> confirmPayload = new LinkedHashMap<>();
+            confirmPayload.put("id", savedTx.getId());
+            confirmPayload.put("bookingId", savedTx.getBookingId());
+            confirmPayload.put("customerName", savedTx.getCustomerName());
+            confirmPayload.put("amount", savedTx.getAmount());
+            confirmPayload.put("method", savedTx.getMethod());
+            confirmPayload.put("status", savedTx.getStatus());
+            realtimeNotificationService.broadcast("TRANSACTION_CONFIRMED", confirmPayload);
+
+            return ResponseEntity.ok(ApiResponse.ok("Đã xác nhận nhận tiền cọc thành công", savedTx));
+        }).orElse(ResponseEntity.notFound().build());
     }
 
     @PreAuthorize("isAuthenticated()")
@@ -381,13 +501,44 @@ public class PublicApiController {
             tx.setCreatedAtInstant(Instant.now());
         }
         Transaction saved = transactionRepository.save(tx);
+        Map<String, Object> txPayload = new LinkedHashMap<>();
+        txPayload.put("id", saved.getId());
+        txPayload.put("bookingId", saved.getBookingId());
+        txPayload.put("customerName", saved.getCustomerName());
+        txPayload.put("amount", saved.getAmount());
+        txPayload.put("method", saved.getMethod());
+        txPayload.put("status", saved.getStatus());
+        txPayload.put("type", saved.getType());
+        txPayload.put("date", saved.getDate());
+        realtimeNotificationService.broadcast("TRANSACTION_CREATED", txPayload);
         return ResponseEntity.ok(ApiResponse.ok("Tạo giao dịch thu chi thành công", saved));
+    }
+
+    private String normalizeRoleId(String rawId) {
+        if (rawId == null) return "";
+        String cleaned = rawId.trim().toUpperCase().replaceAll("[^A-Z0-9_]+", "_").replaceAll("^_+|_+$", "");
+        if (cleaned.isEmpty()) return "";
+        return cleaned.startsWith("ROLE_") ? cleaned : "ROLE_" + cleaned;
+    }
+
+    private List<Role> dedupeRoles(List<Role> roles) {
+        Map<String, Role> deduped = new LinkedHashMap<>();
+        for (Role r : roles) {
+            if (r == null || r.getId() == null) continue;
+            String canonicalId = normalizeRoleId(r.getId());
+            if (canonicalId.isEmpty()) continue;
+            Role existing = deduped.get(canonicalId);
+            if (existing == null || (!existing.getId().startsWith("ROLE_") && r.getId().startsWith("ROLE_"))) {
+                deduped.put(canonicalId, r);
+            }
+        }
+        return new ArrayList<>(deduped.values());
     }
 
     @PreAuthorize("isAuthenticated()")
     @GetMapping("/roles")
     public ResponseEntity<ApiResponse<List<Role>>> getRoles() {
-        return ResponseEntity.ok(ApiResponse.ok(roleRepository.findAll()));
+        return ResponseEntity.ok(ApiResponse.ok(dedupeRoles(roleRepository.findAll())));
     }
 
     @PreAuthorize("hasAnyAuthority('ROLE_SYSADMIN', 'ROLE_ADMIN', 'config_permissions', 'grant_permissions')")
@@ -396,7 +547,11 @@ public class PublicApiController {
             @PathVariable String id,
             @RequestBody Role role,
             @AuthenticationPrincipal UserPrincipal currentUser) {
-        if ("ROLE_SYSADMIN".equalsIgnoreCase(id)) {
+        String canonicalId = normalizeRoleId(id);
+        if (canonicalId.isEmpty()) {
+            throw new IllegalArgumentException("Mã vai trò không hợp lệ.");
+        }
+        if ("ROLE_SYSADMIN".equals(canonicalId)) {
             boolean isSysAdmin = hasAnyAuthority(currentUser, "ROLE_SYSADMIN");
             var existingSysAdminRole = roleRepository.findById("ROLE_SYSADMIN");
             if (!isSysAdmin) {
@@ -411,7 +566,7 @@ public class PublicApiController {
                 role.getPermissions().put("grant_permissions", true);
             }
         }
-        role.setId(id);
+        role.setId(canonicalId);
         Role saved = roleRepository.save(role);
         return ResponseEntity.ok(ApiResponse.ok("Cập nhật vai trò phân quyền thành công", saved));
     }
@@ -437,9 +592,10 @@ public class PublicApiController {
 
         boolean callerIsSysAdmin = hasAnyAuthority(currentUser, "ROLE_SYSADMIN");
         String requestedRoleId = staffReq.getRoleId().trim();
-        String mappedRole = requestedRoleId.startsWith("ROLE_")
-                ? requestedRoleId.toUpperCase()
-                : "ROLE_" + requestedRoleId.toUpperCase();
+        String mappedRole = normalizeRoleId(requestedRoleId);
+        if (mappedRole.isEmpty()) {
+            throw new IllegalArgumentException("Vai trò nhân viên không hợp lệ.");
+        }
 
         if ("ROLE_SYSADMIN".equals(mappedRole) && !callerIsSysAdmin) {
             throw new AccessDeniedException("Chỉ tài khoản SysAdmin mới được phép gán vai trò ROLE_SYSADMIN.");
@@ -471,7 +627,7 @@ public class PublicApiController {
                     existing.setPhone(staffReq.getPhone().trim());
                 }
 
-                existing.setRoleId(requestedRoleId);
+                existing.setRoleId(mappedRole);
                 existing.setRoles(isSysAdminAccount(existing)
                         ? Set.of("ROLE_SYSADMIN", "ROLE_ADMIN")
                         : Set.of(mappedRole));
@@ -541,7 +697,7 @@ public class PublicApiController {
                 .fullName(staffReq.getFullName() != null && !staffReq.getFullName().isBlank() ? staffReq.getFullName().trim() : resolvedName)
                 .email(staffReq.getEmail() != null ? staffReq.getEmail().trim() : null)
                 .phone(staffReq.getPhone() != null ? staffReq.getPhone().trim() : null)
-                .roleId(requestedRoleId)
+                .roleId(mappedRole)
                 .roleName(resolvedRoleName)
                 .roles(Set.of(mappedRole))
                 .status(isActive ? "active" : "locked")
