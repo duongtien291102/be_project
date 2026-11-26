@@ -31,29 +31,43 @@ jobs:
       - name: Build JAR with Maven
         run: ./mvnw clean package -DskipTests --batch-mode
 
-      - name: Prepare SSH key
+      - name: Setup SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY_B64 }}" | base64 -d > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          mkdir -p $HOME/.ssh
+          echo "$SSH_KEY_B64" | base64 -d > $HOME/.ssh/deploy_key
+          chmod 600 $HOME/.ssh/deploy_key
+          chmod 700 $HOME/.ssh
+          ssh-keygen -l -f $HOME/.ssh/deploy_key
+          ssh-keyscan -H "$VPS_HOST" >> $HOME/.ssh/known_hosts 2>/dev/null
 
-      - name: Copy JAR to VPS via SCP
+      - name: Copy JAR to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            target/be_project-0.0.1-SNAPSHOT.jar \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/be_project-0.0.1-SNAPSHOT.jar
+          scp -i $HOME/.ssh/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o BatchMode=yes \
+              target/be_project-0.0.1-SNAPSHOT.jar \
+              "$VPS_USER@$VPS_HOST:/tmp/be_project-0.0.1-SNAPSHOT.jar"
 
-      - name: Deploy & Restart Backend service
+      - name: Deploy & Restart Backend
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'ENDSSH'
-          set -e
-          echo "Deploy Backend JAR len /opt/hotel-backend..."
-          systemctl stop hotel-backend
-          cp /tmp/be_project-0.0.1-SNAPSHOT.jar /opt/hotel-backend/app.jar
-          systemctl start hotel-backend
-          sleep 8
-          systemctl is-active hotel-backend
-          echo "Backend deploy thanh cong! Port 2402"
-          ENDSSH
+          ssh -i $HOME/.ssh/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o BatchMode=yes \
+              "$VPS_USER@$VPS_HOST" \
+              'set -e
+               echo "Deploy Backend JAR len /opt/hotel-backend..."
+               systemctl stop hotel-backend
+               cp /tmp/be_project-0.0.1-SNAPSHOT.jar /opt/hotel-backend/app.jar
+               systemctl start hotel-backend
+               sleep 8
+               systemctl is-active hotel-backend
+               echo "Backend deploy thanh cong! Port 2402"'
