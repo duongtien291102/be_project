@@ -25,6 +25,9 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
+      - name: Make mvnw executable
+        run: chmod +x mvnw
+
       - name: Build JAR with Maven
         run: ./mvnw clean package -DskipTests --batch-mode
 
@@ -48,10 +51,10 @@ jobs:
           port: 22
           script: |
             set -e
-            echo "🚀 Deploy Backend JAR lên /opt/hotel-backend..."
+            echo "Deploy Backend JAR len /opt/hotel-backend..."
             systemctl stop hotel-backend
             cp /tmp/be_project-0.0.1-SNAPSHOT.jar /opt/hotel-backend/app.jar
             systemctl start hotel-backend
             sleep 8
             systemctl is-active hotel-backend
-            echo "✅ Backend deploy thành công! API tại http://${{ secrets.VPS_HOST }}:2402/api"
+            echo "Backend deploy thanh cong! API tai port 2402"
